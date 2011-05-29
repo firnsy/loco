@@ -1,0 +1,186 @@
+
+------------------------------------------------------------------------------
+0. SUMMARY
+------------------------------------------------------------------------------
+
+loco - version 0.1
+
+loco measures the end to end capacity of a network path from host S (server)
+to client (C). The capacity of a path (aka bottleneck bandwidth), is the
+maximum IP-layer throughput that a flow can get in the path from S to C. The
+capacity does not depend on the load of the path. 
+
+
+------------------------------------------------------------------------------
+1. COPYRIGHT
+------------------------------------------------------------------------------
+
+Copyright (C)2011 Ian Firns     <firnsy@securixlive.com>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License Version 2 as
+published by the Free Software Foundation.  You may not use, modify or
+distribute this program under any other version of the GNU General
+Public License.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+
+Some of this code was based on pathrate, which was developed by Constantios
+Dovrolis and Ravi S Prasad at Georgia Tech supported by the SciDAC program
+of the US DoE.
+
+
+------------------------------------------------------------------------------
+2. OVERVIEW
+------------------------------------------------------------------------------
+
+loco measures the capacity of a network path from host S (sender) to host R
+(receiver). The capacity of a path, aka bottleneck bandwidth, is the maximum
+IP-layer throughput that a flow can get in the path from S to R. The capacity
+does not depend on the load of the path. 
+
+* The capacity of a path is not the same metric as the available bandwidth
+of a path. The later takes into account the cross traffic load in the path, and
+it is less than the capacity. Also, the capacity is different than the Bulk
+Transfer Capacity (BTC) metric, currently standardized by the IETF. The BTC is
+the maximum throughput that a TCP connection can get in the path, when it is
+only limited by the network.
+
+* loco requires that you have access at both end-points of the 
+network path (i.e., you have to be able to run loco at both S and R).  This
+makes the tool harder to use, but it is the only way to avoid distorting the
+measurements with the reverse path from R to S. 
+
+* You can run loco from user-space, and you don't need any superuser 
+privileges.
+
+* loco takes normally about 15 minutes to run. Whilst it's possible to
+simplify the measurement process so that it takes much shorter, loco focuses
+on accuracy rather than on execution speed. Notice that the capacity of a
+path is a static metric that does not change unless if there are routing or
+infrastructure changes in the path. Consequently, the long execution time of
+loco should not be a concern. 
+
+* It is important to run loco from relatively idle hosts. Before 
+running loco, make sure that there are no other CPU or I/O intensive
+processes running. If there are, it is likely that they will interact with
+loco's user-level packet timestamping, and the results that you'll get may
+be inaccurate.
+
+* Certain links use load balancing (e.g., Cisco's standard CEF load-sharing). 
+In those cases, even though a certain "fat link" may have a capacity X, an IP
+flow will only be able to see a maximum bandwidth of X/n, where n is the number
+of "sub-links" (e.g., ATM PVCs) that make up the "fat link". 
+
+* In paths that are limited by Gigabit Ethernet interfaces,
+the loco final capacity estimate is often less than 1000Mbps. The major
+issue there is whether the two end-hosts can truly saturate a Gigabit Ethernet
+path, even when they transfer MTU UDP packets.  We have observed that in order
+to saturate a GigE interface, it is important that end-hosts have a 64-bit PCI
+bus (together with a GHz processor and a decent GigE NIC of course).  In other
+words, loco cannot measure a nominal network capacity if the end-hosts are
+not really able to use that capacity.
+
+* Some links perform traffic shaping, providing a certain
+peak rate P, while if the burst size is larger than a certain amount of bytes,
+the maximum rate is reduced to a lower ("sustainable") rate S. In such paths,
+loco should measure P, not S.
+
+* In previous versions, loco would sometimes report that it
+cannot produce a final capacity estimate (especially, in      high-bandwidth
+paths). In the new version, loco will report instead a lower-bound on the
+capacity of a path. 
+
+* Internet paths are often asymmetric. The capacity of the path from S to R 
+is not necessarily the same with the capacity of the path from R to S.
+
+* For heavily loaded paths, loco can take a while until it reports a 
+final estimate. "A while" means about half an hour. The good news is that the
+capacity of a path does not change very often, unless if there is route
+flapping. 
+
+* loco uses UDP packets for probing the path's bandwidth, and it also 
+establishes a TCP connection between the two hosts for control purposes.  The
+UDP port number is 48698 (at the receiver) and the TCP port number is 48699 (at
+the sender).
+
+* loco does some primitive form of congestion avoidance (it will abort
+after many packet losses).
+
+* loco assumes that the IP and UDP headers (28 bytes totally) are
+fully transmitted together with the packet payload. For links that do header
+compression (RFC 1144) this will cause a slight capacity overestimation.  
+ 
+
+------------------------------------------------------------------------------
+4. HOW IT WORKS
+------------------------------------------------------------------------------
+
+loco consists of the following "run phases":
+
+1) Initially, the tool discovers the maximum train-length that the path can
+carry. The idea is that we do not want to overload the path with very long
+packet trains that would cause buffer overflows. The maximum train length that
+we try is 50 packets. We stop increasing the train length after three lossy
+packet trains at a given train length.
+
+2) Then, loco sends a number of packet trains of increasing length (called
+"preliminary measurements" phase). The goal here is to detect if the narrow
+link has parallel sub-channels, or if it performs traffic shaping. You can
+ignore this phase until you become an "advanced user". This phase also checks
+whether the path is "easy to measure" (very lightly loaded). In that case,
+loco reports its final estimate and exits. An important part of this phase
+is that loco computes the "bandwidth resolution" (think of it as a
+histogram bin width). The final capacity estimate will be a range of this
+width.
+
+3) In this phase, called Phase I, loco generates a large number (1000) of
+packet-pairs. The goal here is to discover all local modes in the packet-pair
+bandwidth distribution. One of the Phase I modes is expected to be the capacity
+of the path. The packets that loco sends in Phase I are of variable size,
+in order to make the non-capacity local modes weaker and wider. 
+
+4) Finally, in Phase II, loco generates a number (500) of packet trains of
+large length. The goal here is to discover which of the Phase I local modes is
+the capacity of the path. To do so, Phase II estimates the Average   
+Dispersion Rate (ADR) metric R, measured from the dispersion of long packet
+trains. We know (see our Infocom 2001 paper) that the capacity is larger than
+R. If there are several Phase I modes that are larger than R, the capacity
+estimate is the mode that maximizes a certain "figure of merit" M. M depends on
+the "narrowness" and the "strength" of each candidate mode in the underlying
+bandwidth distribution of Phase I. The capacity mode should be narrow and
+strong, i.e., to have a large value of M. 
+
+The very final outcome of loco is the capacity estimate for the path. 
+
+
+------------------------------------------------------------------------------
+5. BUILDING
+------------------------------------------------------------------------------
+
+After you have extracted the loco code in a directory, run make.
+
+$ make
+
+You should then have two executables in the loco directory.
+1. loco (the client) 
+2. locod (the server/daemon)
+
+
+------------------------------------------------------------------------------
+6. REFERENCES
+------------------------------------------------------------------------------
+
+1. "What do packet dispersion techniques measure?",
+      C. Dovrolis, P. Ramanathan, D.Moore, 
+      Proceedings of IEEE Infocom 2001 
+
+2. "Packet dispersion techniques and capacity estimation",
+      C. Dovrolis, P. Ramanathan, D.Moore
