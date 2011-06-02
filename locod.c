@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include <getopt.h>
 // global variables
 
 struct config_s
@@ -69,6 +70,8 @@ struct config_s conf;
 
 // private functions
 int parse_cmdline(int argc, char **argv);
+void banner(void);
+void usage(const char *);
 int init(void);
 int init_packet_train(void);
 char * create_packet_train(uint32_t train_id, uint32_t packet_id, unsigned int packet_length);
@@ -83,14 +86,14 @@ int exit_clean(void);
 
 int main(int argc, char **argv)
 {
-  ulog(LOG_INFO, "INIT!!!\n");
-
   /* check command line arguments */
   if ( parse_cmdline(argc, argv) != 0 )
   {
-    ulog(LOG_FATAL, "Unable to parse commandline.\n");
+    fprintf(stderr, "Unable to parse commandline.\n");
     exit(1);
   }
+
+  fprintf(stdout, "Initialising...\n");
 
   conf.fsm_state = FSM_INIT;
   conf.train_id = 1;
@@ -108,14 +111,14 @@ int main(int argc, char **argv)
 
   if ( (conf.tcp_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0 )
   {
-    ulog(LOG_FATAL, "Unable to open TCP socket.\n");
+    fprintf(stderr, "Unable to open TCP socket.\n");
     exit(1);
   }
 
   opt = 1;
   if ( setsockopt(conf.tcp_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0 )
   {
-    ulog(LOG_FATAL, "Unable set TCP socket options for address reuse.\n");
+    fprintf(stderr, "Unable set TCP socket options for address reuse.\n");
     exit(1);
   }
 
@@ -126,13 +129,13 @@ int main(int argc, char **argv)
 
   if ( bind(conf.tcp_socket, (struct sockaddr *)&conf.tcp_addr, sizeof(conf.tcp_addr)) != 0 )
   {
-    ulog(LOG_FATAL, "Unable to bind to TCP socket.\n");
+    fprintf(stderr, "Unable to bind to TCP socket.\n");
     exit(1);
   }
 
   if ( listen(conf.tcp_socket, 1) < 0 )
   {
-    ulog(LOG_FATAL, "Unable to listen on TCP socket.\n");
+    fprintf(stderr, "Unable to listen on TCP socket.\n");
     exit(1);
   }
   // TCP SOCKET INIT - END
@@ -143,7 +146,7 @@ int main(int argc, char **argv)
   // UDP SOCKET INIT
   if ( (conf.udp_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0 )
   {
-    ulog(LOG_FATAL, "Unable to open UDP socket.\n");
+    fprintf(stderr, "Unable to open UDP socket.\n");
     exit(1);
   }
 
@@ -154,7 +157,7 @@ int main(int argc, char **argv)
 
   if ( bind(conf.udp_socket,(struct sockaddr *)&conf.udp_addr, sizeof(conf.udp_addr)) != 0 )
   {
-    ulog(LOG_FATAL, "Unable to bind to UDP socket.\n");
+    fprintf(stderr, "Unable to bind to UDP socket.\n");
     exit(1);
   }
 
@@ -176,20 +179,20 @@ int main(int argc, char **argv)
     conf.fsm_state = FSM_INIT;
     conf.failed_messages = 0;
 
-    ulog(LOG_INFO, "Listening ...\n");
+    fprintf(stdout, "Listening ...\n");
 
     // wait for receiver to start a new measurement cycle
     len = sizeof(conf.tcp_cli_addr);
     if ( (conf.tcp_fd = accept(conf.tcp_socket, (struct sockaddr*)&conf.tcp_cli_addr, &len)) < 0 )
     {
-      perror("accept(sock_tcp):");
+      perror("OOPS! accept(conf.tcp_socket):");
       continue;
     }
 
     {
       // who has connected to us
       conf.receiver = gethostbyaddr((char*)&(conf.tcp_cli_addr.sin_addr), sizeof(conf.tcp_cli_addr.sin_addr), AF_INET);
-      ulog(LOG_INFO, "Session initiated by %s\n", (NULL == conf.receiver) ? "unknown" : conf.receiver->h_name);
+      fprintf(stdout, "Session initiated by %s\n", (NULL == conf.receiver) ? "unknown" : conf.receiver->h_name);
 
       // we have the receiver's TCP address sorted out, let's get the UDP address
       bzero((char *)&conf.udp_cli_addr, sizeof(conf.udp_cli_addr));
@@ -206,7 +209,7 @@ int main(int argc, char **argv)
 
         if ( select(conf.tcp_fd + 1, &read_fds, NULL, NULL, NULL) == -1 )
         {
-          perror("WOOPS: ");
+          perror("OOPS! select(): ");
           conf.fsm_state = FSM_END;            
         }
 
@@ -322,9 +325,72 @@ int parse_cmdline(int argc, char **argv)
 
   conf.udp_cli_port = DEFAULT_UDP_CLIENT_PORT;
 
+  int c;
+  int long_option_index = 0;
+  static struct option long_options[] = {
+    {"help", 0, NULL, '?'},
+    {"version", 0, NULL, 'V'},
+    {"port", 1, NULL, 'f'},
+    {0, 0, 0, 0}
+  };
+
+  while( (c=getopt_long(argc, argv, "?Vp:", long_options, &long_option_index)) != EOF )
+  {
+    switch (c)
+    {
+      case '?':
+        usage(argv[0]);
+        exit(0);
+        break;
+      case 'V':
+        banner();
+        exit(0);
+        break;
+      case 'p':
+        conf.tcp_port = atoi(optarg);
+        if ( conf.tcp_port == 0 )
+        {
+          fprintf(stderr, "FATAL: TCP listen port %d is not valid!\n", conf.tcp_port);
+          exit(1);
+        }
+        break;
+    }
+  }
+
   return 0;
 }
 
+void banner()
+{
+  fprintf(stderr, ""
+    "   .' ___\n"
+    "  ][__]_[  Loco v%s.%s.%s %s\n"
+    " (____|_|  (C) Copyright 2011 Ian Firns (firnsy@securixlive.com)    \n"
+    " /oo-OOOO\n"
+    "\n", VER_MAJOR, VER_MINOR, VER_REV,
+#ifdef DEBUG
+"DEBUG "
+#else
+""
+#endif
+  );
+}
+
+void usage(const char *program_name)
+{
+  fprintf(stdout, "\n");
+  fprintf(stdout, "USAGE: %s [-options]\n", program_name);
+  fprintf(stdout, "\n");
+  fprintf(stdout, " General Options:\n");
+  fprintf(stdout, "  -?        You're reading it.\n");
+  fprintf(stdout, "  -V        Version and compiled in options.\n");
+  fprintf(stdout, "  -p <port> Specify C&C listen port (TCP).\n");
+  fprintf(stdout, "\n");
+  fprintf(stdout, " Long Options:\n");
+  fprintf(stdout, "  --help    Same as '?'\n");
+  fprintf(stdout, "  --version Same as 'V'\n");
+  fprintf(stdout, "\n");
+}
 
 int init_packet_train()
 {

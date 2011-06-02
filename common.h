@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <sys/time.h>
 
+#define VER_MAJOR "0"
+#define VER_MINOR "2"
+#define VER_REV   "0"
+
 #define BUFSIZE 1024
 
 #define BW_COVAR_THRESHOLD .05
@@ -25,18 +29,25 @@
 #define TRAIN_LENGTH_MIN 2
 #define TRAIN_LENGTH_MAX 32
 
-
 #define TRAIN_PACKET_LENGTH_MIN 28
 #define TRAIN_PACKET_LENGTH_MAX 1000
 #define TRAIN_PACKET_LENGTH_SIZES 40
 
-
 #define P1_TRAIN_DISCARD_COUNT_MAX 5
+
+// ASSESSMENT TYPES
+#define BW_ASSESS_UNKNOWN 0
+#define BW_ASSESS_MODE    1
+#define BW_ASSESS_NOMODE  2
+#define BW_ASSESS_LBOUND  3
+#define BW_ASSESS_QUICK   4
 
 
 // OPERATING MODE
-#define MODE_NET 1
-#define MODE_CSV 2
+#define MODE_HELP  1
+#define MODE_NET   2
+#define MODE_CSV   4
+#define MODE_QUICK 8
 
 
 // MODE CALCULATION
@@ -46,19 +57,12 @@
   
 #define ADR_THRESHOLD 0.9
 
-
-//
 // CONTROLL MESSAGES
-//
 #define MSG_SESSION_INIT                 1
 #define MSG_SESSION_END                  2
-
 #define MSG_RTT_SYNC                     3
-
 #define MSG_SESSION_CLIENT_UDP_PORT_SET  5
-
 #define MSG_TRAIN_ID_SET                 10
-
 #define MSG_TRAIN_SPACING_SET            11
 #define MSG_TRAIN_SPACING_MIN_SET        12
 #define MSG_TRAIN_SPACING_MAX_SET        13
@@ -68,28 +72,25 @@
 #define MSG_TRAIN_PACKET_LENGTH_SET      17
 #define MSG_TRAIN_PACKET_LENGTH_MIN_SET  18
 #define MSG_TRAIN_PACKET_LENGTH_MAX_SET  19
-
-
 #define MSG_TRAIN_SEND                   40
 #define MSG_TRAIN_SENT                   41
 #define MSG_TRAIN_RECEIVE_ACK            42
 #define MSG_TRAIN_RECEIVE_FAIL           43
 
-//
 // FSM STATES
-//
 #define FSM_INIT      0
 #define FSM_RTT_SYNC  1
 #define FSM_PRELIM    5
 #define FSM_P1        10
-#define FSM_P1_CALC   11
-#define FSM_P2        20
-#define FSM_P2_CALC   21
-#define FSM_CALC      50
+#define FSM_P1_CALC   40
+#define FSM_P2        50
+#define FSM_P2_CALC   70
+#define FSM_CALC      80
+#define FSM_CLOSE     90
 #define FSM_END       99
-#define FSM_CLOSE     999
 
 
+// PUBLIC FUNCTIONS
 int send_control_message(int fd, uint32_t code, uint32_t value);
 int receive_control_message(int fd, uint32_t *code, uint32_t *value);
 

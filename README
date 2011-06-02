@@ -3,7 +3,7 @@
 0. SUMMARY
 ------------------------------------------------------------------------------
 
-loco - version 0.1
+loco - version 0.2
 
 loco measures the end to end capacity of a network path from host S (server)
 to client (C). The capacity of a path (aka bottleneck bandwidth), is the
@@ -41,8 +41,8 @@ of the US DoE.
 2. OVERVIEW
 ------------------------------------------------------------------------------
 
-loco measures the capacity of a network path from host S (sender) to host R
-(receiver). The capacity of a path, aka bottleneck bandwidth, is the maximum
+loco measures the capacity of a network path from host S (server) to host C
+(client). The capacity of a path, aka bottleneck bandwidth, is the maximum
 IP-layer throughput that a flow can get in the path from S to R. The capacity
 does not depend on the load of the path. 
 
@@ -53,53 +53,51 @@ Transfer Capacity (BTC) metric, currently standardized by the IETF. The BTC is
 the maximum throughput that a TCP connection can get in the path, when it is
 only limited by the network.
 
-* loco requires that you have access at both end-points of the 
-network path (i.e., you have to be able to run loco at both S and R).  This
-makes the tool harder to use, but it is the only way to avoid distorting the
-measurements with the reverse path from R to S. 
+* loco requires that you have access at both end-points of the network path
+(i.e., you have to be able to run loco/locod at both S and C). This makes the
+tool harder to use, but it is the only way to avoid distorting the measurements
+with the reverse path from C to S.
 
 * You can run loco from user-space, and you don't need any superuser 
 privileges.
 
-* loco takes normally about 15 minutes to run. Whilst it's possible to
-simplify the measurement process so that it takes much shorter, loco focuses
-on accuracy rather than on execution speed. Notice that the capacity of a
-path is a static metric that does not change unless if there are routing or
-infrastructure changes in the path. Consequently, the long execution time of
-loco should not be a concern. 
+* loco takes normally about 15 minutes to run. Whilst it's possible to simplify
+the measurement process so that it takes much shorter, loco focuses on accuracy
+rather than on execution speed. Notice that the capacity of a path is a static
+metric that does not change unless if there are routing or infrastructure
+changes in the path. Consequently, the long execution time of loco should not
+be a concern. 
 
-* It is important to run loco from relatively idle hosts. Before 
-running loco, make sure that there are no other CPU or I/O intensive
-processes running. If there are, it is likely that they will interact with
-loco's user-level packet timestamping, and the results that you'll get may
-be inaccurate.
+* It is important to run loco from relatively idle hosts. Before running loco,
+make sure that there are no other CPU or I/O intensive processes running. If
+there are, it is likely that they will interact with loco's user-level packet
+timestamping, and the results that you'll get may be inaccurate.
 
 * Certain links use load balancing (e.g., Cisco's standard CEF load-sharing). 
 In those cases, even though a certain "fat link" may have a capacity X, an IP
 flow will only be able to see a maximum bandwidth of X/n, where n is the number
 of "sub-links" (e.g., ATM PVCs) that make up the "fat link". 
 
-* In paths that are limited by Gigabit Ethernet interfaces,
-the loco final capacity estimate is often less than 1000Mbps. The major
-issue there is whether the two end-hosts can truly saturate a Gigabit Ethernet
-path, even when they transfer MTU UDP packets.  We have observed that in order
-to saturate a GigE interface, it is important that end-hosts have a 64-bit PCI
-bus (together with a GHz processor and a decent GigE NIC of course).  In other
-words, loco cannot measure a nominal network capacity if the end-hosts are
-not really able to use that capacity.
+* In paths that are limited by Gigabit Ethernet interfaces, the loco final
+capacity estimate is often less than 1000Mbps. The major issue there is whether
+the two end-hosts can truly saturate a Gigabit Ethernet path, even when they
+transfer MTU UDP packets.  We have observed that in order to saturate a GigE
+interface, it is important that end-hosts have a 64-bit PCI bus (together with
+a GHz processor and a decent GigE NIC of course). In other words, loco cannot
+measure a nominal network capacity if the end-hosts are not really able to use
+that capacity.
 
-* Some links perform traffic shaping, providing a certain
-peak rate P, while if the burst size is larger than a certain amount of bytes,
-the maximum rate is reduced to a lower ("sustainable") rate S. In such paths,
-loco should measure P, not S.
+* Some links perform traffic shaping, providing a certain peak rate P, while if
+the burst size is larger than a certain amount of bytes, the maximum rate is
+reduced to a lower ("sustainable") rate S. In such paths, loco should measure
+ P, not S.
 
-* In previous versions, loco would sometimes report that it
-cannot produce a final capacity estimate (especially, in      high-bandwidth
-paths). In the new version, loco will report instead a lower-bound on the
-capacity of a path. 
+* If loco cannot produce a final capacity estimate (especially, in
+high-bandwidth paths). In the new version, loco will report instead a
+lower-bound on the capacity of a path. 
 
-* Internet paths are often asymmetric. The capacity of the path from S to R 
-is not necessarily the same with the capacity of the path from R to S.
+* Internet paths are often asymmetric. The capacity of the path from S to C 
+is not necessarily the same with the capacity of the path from C to S.
 
 * For heavily loaded paths, loco can take a while until it reports a 
 final estimate. "A while" means about half an hour. The good news is that the
@@ -108,8 +106,8 @@ flapping.
 
 * loco uses UDP packets for probing the path's bandwidth, and it also 
 establishes a TCP connection between the two hosts for control purposes.  The
-UDP port number is 48698 (at the receiver) and the TCP port number is 48699 (at
-the sender).
+UDP port number is 32002 (at the client) and the TCP port number is 32001 (at
+the server).
 
 * loco does some primitive form of congestion avoidance (it will abort
 after many packet losses).
@@ -175,7 +173,82 @@ You should then have two executables in the loco directory.
 
 
 ------------------------------------------------------------------------------
-6. REFERENCES
+6. USAGE
+------------------------------------------------------------------------------
+
+The command usage for both loco and locod are shown below.
+
+USAGE: ./loco [-options]
+
+ General Options:
+  -?            You're reading it.
+  -V            Version and compiled in options.
+  -f <format>   Specify output format line. See Format options.
+  -p <port>     Specify C&C listen port (TCP).
+
+ Online Options:
+  -h <hostname> Specify the testing server's hostname to coordinate with.
+  -q            Force a quick (likely less accurate) assessment.
+  -w <file>     Specify file for writing of collected metric data. (Default: /tmp/loco.csv)
+
+ Offline Options:
+  -r <file>     Perform offline test using values specified in file.
+  -b <witdh>    Specify the bin width in Mpbs for offline testing.
+
+ Long Options:
+  --help        Same as '?'
+  --version     Same as 'V'
+  --format      Same as 'f'
+  --host        Same as 'h'
+  --quick       Same as 'q'
+
+ Format Options:
+  %be           Bandwidth estimated [Mbps]
+  %am           Assessment mode (numeric)
+  %AM           Assessment mode (literal)
+  %bl           Bandwitdh lower bound [Mbps]
+  %bu           Bandwitdh upper bound [Mbps]
+  %bw           Bandwitdh bin width [Mbps]
+  %pd           Packet dispersion minimum [us]
+  %ul           UDP kernel/user latency [us]
+  %pm           Preliminary assessed bandwidth average [Mbps]
+  %ps           Preliminary assessed standard deviation [Mbps]
+
+
+USAGE: ./locod [-options]
+
+ General Options:
+  -?        You're reading it.
+  -V        Version and compiled in options.
+  -p <port> Specify C&C listen port (TCP).
+
+ Long Options:
+  --help    Same as '?'
+  --version Same as 'V'
+
+
+------------------------------------------------------------------------------
+7. TIPS
+------------------------------------------------------------------------------
+
+Due to the potentially lengthy assessment times, you can obtain progress report
+by sending a "USR1" signal to the client process ID. This will dump three (3)
+comma separated values to stderr, denoting:
+  1. overall progress,
+  2. literal state, and
+  3. best estimate of bandwidth hitherto.
+
+For example:
+
+# ./loco -h 192.168.0.10 &
+> [1] 10601
+
+# kill -USR1 10601
+> 25%,P1_COLLECT,0.0000
+
+
+------------------------------------------------------------------------------
+8. REFERENCES
 ------------------------------------------------------------------------------
 
 1. "What do packet dispersion techniques measure?",
@@ -184,3 +257,5 @@ You should then have two executables in the loco directory.
 
 2. "Packet dispersion techniques and capacity estimation",
       C. Dovrolis, P. Ramanathan, D.Moore
+
+

@@ -8,6 +8,8 @@
 #include <strings.h>
 #include <unistd.h>
 
+#include <getopt.h>
+
 #include <signal.h>
 #include <pthread.h>
 #include <errno.h>
@@ -42,11 +44,15 @@ struct config_s
   int tcp_port;
   struct sockaddr_in tcp_addr;
 
+  int progress;
+
   char *hostname;
   struct hostent *server;
 
   int mode;
   char *csv_filepath;
+  char *csv_out_filepath;
+  char *assessment_format;
 
   double rtt_tcp_socket_average;
   double latency_udp_kernel_user_average;
@@ -69,6 +75,7 @@ struct config_s
 
   double prelim_bw_mean;
   double prelim_bw_std;
+  int prelim_trains_count;
    
   // phase 1 
 
@@ -98,6 +105,11 @@ struct config_s
   struct mode_s p2_modes[1024];
   int p2_modes_count;
 
+  // assessed values
+
+  int bandwidth_assessment;
+  double bandwidth_lo;
+  double bandwidth_hi;
   double bandwidth_estimated;
   double bin_width;
 };
@@ -108,13 +120,22 @@ struct config_s conf;
 
 // private functions
 int parse_cmdline(int argc, char **);
+void banner(void);
+void usage(const char *);
+
 int init(void);
 int init_packet_train(void);
 char * create_packet_train(uint32_t train_id, uint32_t packet_id, int packet_length);
-void exit_clean(int exit_code);
 int fsm_state_get(void);
 void fsm_state_set(int state);
+int progress_get(void);
+const char * fsm_state_literal_get();
+void progress_set(int progress);
 
+const char * assessment_mode_literal_get(int mode);
+
+void result_format_validate(const char *format);
+void result_format_write(FILE *fd, const char *format);
 
 int session_csv_read(const char *filepath);
 int session_csv_write(const char *filepath);
@@ -131,7 +152,7 @@ int session_p2_calculate(void);
 
 void session_calculate(void);
 
-void session_end(void);
+void session_end(int exit_code);
 
 int receive_train(uint32_t train_id, int length, int packet_length, struct timeval *timestamps);
 
@@ -139,61 +160,40 @@ int calculate_mode(double ordered_array[], short validity_array[], int elements,
 
 int main(int argc, char **argv)
 {
-  /* check command line arguments */
+  // check command line arguments
   if ( parse_cmdline(argc, argv) != 0 )
-    exit_clean(1);
+    session_end(1);
 
   if ( session_init() != 0 )
-    exit_clean(1);
+    session_end(1);
 
   //
   // CALCULATION SESSION
 
-  if ( conf.mode == MODE_NET )
-  {
-    if ( session_net_init() != 0 )
-      exit_clean(1);
+  if ( session_net_init() != 0 )
+    session_end(1);
 
-    if ( session_rtt_sync() != 0 )
-      exit_clean(1);
+  if ( session_rtt_sync() != 0 )
+    session_end(1);
 
-    if ( session_prelim() != 0 )
-      exit_clean(1);
+  if ( session_prelim() != 0 )
+    session_end(1);
 
-    if ( session_p1() != 0 )
-      exit_clean(1);
+  if ( session_p1() != 0 )
+    session_end(1);
 
-    if ( session_p1_calculate() != 0 )
-      exit_clean(1);
+  if ( session_p1_calculate() != 0 )
+    session_end(1);
 
-    if ( session_p2() != 0 )
-      exit_clean(1);
+  if ( session_p2() != 0 )
+    session_end(1);
 
-    if ( session_p2_calculate() != 0 )
-      exit_clean(1);
-  }
-  else
-  {
-    if ( session_csv_read(conf.csv_filepath) != 0 )
-      exit_clean(1);
-
-    // TODO: remove when saved to file
-    conf.prelim_bw_mean = stat_array_mean(conf.p1_trains_bw, conf.p1_trains_count);
-
-    fsm_state_set(FSM_P1_CALC);
-
-    if ( session_p1_calculate() != 0 )
-      exit_clean(1);
-
-    fsm_state_set(FSM_P2_CALC);
-
-    if ( session_p2_calculate() != 0 )
-      exit_clean(1);
-  }
+  if ( session_p2_calculate() != 0 )
+    session_end(1);
 
   session_calculate();
 
-  session_end();
+  session_end(0);
 
   return 0;
 }
@@ -201,6 +201,17 @@ int main(int argc, char **argv)
 //
 // PRIVATE
 //
+void signal_handler(int signal)
+{
+  // sigpipe is likely the client died so just abort the connection
+  if ( signal == SIGUSR1 )
+    fprintf(stderr, "%d%%,%s,%.4f\n", progress_get(), fsm_state_literal_get(), conf.bandwidth_estimated);
+  else if ( (signal == SIGTERM) || 
+            (signal == SIGINT)  ||
+            (signal == SIGPIPE) )
+    session_end(1);
+}
+
 
 void fsm_state_set(int state)
 {
@@ -223,45 +234,166 @@ int parse_cmdline(int argc, char **argv)
   int c;
 
   // set sane defaults
-  conf.mode = MODE_NET;
+  conf.mode = MODE_HELP;
   conf.csv_filepath = NULL;
   conf.hostname = NULL;
   conf.tcp_port = DEFAULT_TCP_SERVER_PORT;
   conf.udp_port = DEFAULT_UDP_CLIENT_PORT;
 
-  while( (c=getopt(argc, argv, "h:Qr:w:")) != EOF )
+  int long_option_index = 0;
+  static struct option long_options[] = {
+    {"help", 0, NULL, '?'},
+    {"version", 0, NULL, 'V'},
+    {"port", 1, NULL, 'f'},
+    {"format", 1, NULL, 'f'},
+    {"host", 1, NULL, 'h'},
+    {"quick", 0, NULL, 'q'},
+    {0, 0, 0, 0}
+  };
+
+  while( (c=getopt_long(argc, argv, "?b:f:h:p:qr:w:QV", long_options, &long_option_index)) != EOF )
   {
     switch (c)
     {
+      case '?':
+        usage(argv[0]);
+        exit(0);
+        break;
+      case 'V':
+        banner();
+        exit(0);
+        break;
+      case 'p':
+        conf.tcp_port = atoi(optarg);
+        if ( conf.tcp_port == 0 )
+        {
+          fprintf(stderr, "FATAL: TCP listen port %d is not valid!\n", conf.tcp_port);
+          exit(1);
+        }
+        break;
+      case 'b':
+        conf.bin_width = strtod(optarg, (char **)NULL);
+        conf.mode |= MODE_CSV;
+        if ( conf.bin_width == 0 )
+        {
+          fprintf(stderr, "FATAL: bin_width value of %.4f is not valid!\n", conf.bin_width);
+          exit(1);
+        }
+        break;
+      case 'f':
+        if ( NULL == conf.assessment_format )
+        {
+          result_format_validate(optarg);
+          conf.assessment_format = strdup(optarg);
+        }
+        break;
       case 'h':
         if ( NULL == conf.hostname )
           conf.hostname = strdup(optarg);
+
+        conf.mode |= MODE_NET;
         break;
-      case 'Q':
+      case 'q':
+        conf.mode |= MODE_QUICK;
         break;
       case 'r':
         if ( NULL == conf.csv_filepath )
           conf.csv_filepath = strdup(optarg);
 
-        conf.mode = MODE_CSV;
+        conf.mode |= MODE_CSV;
         break;
-      case 'w':
-        if ( NULL == conf.csv_filepath )
-          conf.csv_filepath = strdup(optarg);
+     case 'w':
+        if ( NULL == conf.csv_out_filepath )
+          conf.csv_out_filepath = strdup(optarg);
         break;
     }
   }
 
-
+  if ( (conf.mode & MODE_CSV) &&
+       (conf.mode & MODE_NET) )
+  {
+    // mixing on-line and off-line options
+    fprintf(stderr, "FATAL: You can't mix online and offline parameters!\n");
+    exit(1);
+  }
+  else if ( ! ((conf.mode & MODE_CSV) ||
+               (conf.mode & MODE_NET)) )
+  {
+    // unknown operating mode
+    fprintf(stderr, "OOPS: How about some options?!\n");
+    usage(argv[0]);
+    exit(1);
+  }
 
   return 0;
 }
 
-int session_init()
+
+void banner()
+{
+  fprintf(stderr, ""
+    "   .' ___\n"
+    "  ][__]_[  Loco v%s.%s.%s %s\n"
+    " (____|_|  (C) Copyright 2011 Ian Firns (firnsy@securixlive.com)    \n"
+    " /oo-OOOO\n"
+    "\n", VER_MAJOR, VER_MINOR, VER_REV,
+#ifdef DEBUG
+"DEBUG "
+#else
+""
+#endif
+  );
+}
+
+void usage(const char *program_name)
+{
+  fprintf(stdout, "\n");
+  fprintf(stdout, "USAGE: %s [-options]\n", program_name);
+  fprintf(stdout, "\n");
+  fprintf(stdout, " General Options:\n");
+  fprintf(stdout, "  -?            You're reading it.\n");
+  fprintf(stdout, "  -V            Version and compiled in options.\n");
+  fprintf(stdout, "  -f <format>   Specify output format line. See Format options.\n");
+  fprintf(stdout, "  -p <port>     Specify C&C listen port (TCP).\n");
+  fprintf(stdout, "\n");
+  fprintf(stdout, " Online Options:\n");
+  fprintf(stdout, "  -h <hostname> Specify the testing server's hostname to coordinate with.\n");
+  fprintf(stdout, "  -q            Force a quick (most likely less accurate) assessment.\n");
+  fprintf(stdout, "  -w <file>     Specify file for writing of collected metric data. (Default: /tmp/loco.csv)\n");
+  fprintf(stdout, "\n");
+  fprintf(stdout, " Offline Options:\n");
+  fprintf(stdout, "  -r <file>     Perform offline test using values specified in file.\n");
+  fprintf(stdout, "  -b <witdh>    Specify the bin width in Mpbs for offline testing.\n");
+  fprintf(stdout, "\n");
+  fprintf(stdout, " Long Options:\n");
+  fprintf(stdout, "  --help        Same as '?'\n");
+  fprintf(stdout, "  --version     Same as 'V'\n");
+  fprintf(stdout, "  --format      Same as 'f'\n");
+  fprintf(stdout, "  --host        Same as 'h'\n");
+  fprintf(stdout, "  --quick       Same as 'q'\n");
+  fprintf(stdout, "\n");
+  fprintf(stdout, " Format Options:\n");
+  fprintf(stdout, "  %%be           Bandwidth estimated [Mbps]\n");
+  fprintf(stdout, "  %%am           Assessment mode (numeric)\n");
+  fprintf(stdout, "  %%AM           Assessment mode (literal)\n");
+  fprintf(stdout, "  %%bl           Bandwitdh lower bound [Mbps]\n");
+  fprintf(stdout, "  %%bu           Bandwitdh upper bound [Mbps]\n");
+  fprintf(stdout, "  %%bw           Bandwitdh bin width [Mbps]\n");
+  fprintf(stdout, "  %%pd           Packet dispersion minimum [us]\n");
+  fprintf(stdout, "  %%ul           UDP kernel/user latency [us]\n");
+  fprintf(stdout, "  %%pm           Preliminary assessed bandwidth average [Mbps]\n");
+  fprintf(stdout, "  %%ps           Preliminary assessed standard deviation [Mbps]\n");
+  fprintf(stdout, "\n");
+}
+
+
+int session_init() 
 {
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_INIT )
     return 1;
+
+  conf.progress = 0;
 
   // initialise calculated variables
   conf.train_length_min = TRAIN_LENGTH_MIN;
@@ -282,14 +414,36 @@ int session_init()
 
   conf.packet_dispersion_delta_min = 0.0;
 
+  conf.bandwidth_assessment = BW_ASSESS_UNKNOWN;
+  conf.bandwidth_lo = 0.0;
+  conf.bandwidth_hi = 0.0;
   conf.bandwidth_estimated = 0.0;
   conf.bin_width = 0.0;
+
+  if ( NULL == conf.assessment_format)
+    conf.assessment_format = "%be%am%AM%bl%bu%bw%pd%ul";
+
+  if ( NULL == conf.csv_out_filepath)
+    conf.csv_out_filepath = "/tmp/loco.csv";
+
+  //
+  // trap expected and manageable signals
+  signal(SIGUSR1, signal_handler);
+  signal(SIGPIPE, signal_handler);
+  signal(SIGINT, signal_handler);
+  signal(SIGTERM, signal_handler);
 
   return 0;
 }
 
 int session_net_init()
 {
+  progress_set(2);
+
+  // ignore if we're not in network mode
+  if ( ! (conf.mode & MODE_NET) )
+    return 0;
+
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_INIT )
     return 1;
@@ -299,7 +453,7 @@ int session_net_init()
   if (conf.server == NULL)
   {
     fprintf(stderr,"ERROR, no such host as %s\n", conf.hostname);
-    exit_clean(1);
+    session_end(1);
   }
 
   //
@@ -307,7 +461,7 @@ int session_net_init()
 
   conf.tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
   if (conf.tcp_socket < 0) 
-    exit_clean(1);
+    session_end(1);
 
   /* build the server's Internet address */
   bzero((char *)&conf.tcp_addr, sizeof(conf.tcp_addr));
@@ -318,8 +472,8 @@ int session_net_init()
 
   if ( connect(conf.tcp_socket, (struct sockaddr *)&conf.tcp_addr, sizeof(conf.tcp_addr)) < 0 )
   { 
-    ulog(LOG_FATAL, "Unable to connect on TCP socket.\n");
-    exit_clean(1);
+    fprintf(stderr, "Unable to connect on TCP socket.\n");
+    session_end(1);
   }
 
   int tcp_flags = fcntl(conf.tcp_socket, F_GETFL, 0);
@@ -353,8 +507,6 @@ int session_net_init()
   // UDP SOCKET INIT - END
   //
 
-
-
   send_control_message(conf.tcp_socket, MSG_SESSION_INIT, 0);
 
   // inform daemon our listening port for trains' destination
@@ -367,6 +519,12 @@ int session_net_init()
 
 int session_rtt_sync()
 {
+  progress_set(5);
+
+  // ignore if we're not in network mode
+  if ( ! (conf.mode & MODE_NET) )
+    return 0;
+
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_RTT_SYNC )
     return 1;
@@ -467,25 +625,26 @@ int session_rtt_sync()
 
   opt_len = sizeof(conf.udp_addr);
 
-  count = 0;
-  valid_count = 0;
+  int latency_count = 0;
+  int latency_count_valid = 0;
 
-  while ( valid_count < LATENCY_VALID_COUNT && count < LATENCY_COUNT_MAX )
+  while ( latency_count_valid < LATENCY_VALID_COUNT && latency_count < LATENCY_COUNT_MAX )
   {
     gettimeofday(&t_mark1, (struct timezone*)0); 
     sendto(conf.udp_socket, packet_random, conf.train_packet_length_max, 0, (struct sockaddr *)&conf.udp_addr, sizeof(struct sockaddr_in));
     n = recvfrom(conf.udp_socket, packet_random, conf.train_packet_length_max, 0, (struct sockaddr *)&conf.udp_addr, &opt_len);
     gettimeofday(&t_mark2, (struct timezone*)0); 
 
-    if ( (count > 0) &&
+    if ( (latency_count > 0) &&
          (n == conf.train_packet_length_max) )
     {
-      packet_deltas[valid_count] = time_delta_us(t_mark1, t_mark2);
-      latency_total_time += packet_deltas[valid_count];
-      valid_count++;
+      packet_deltas[latency_count_valid] = time_delta_us(t_mark1, t_mark2);
+      latency_total_time += packet_deltas[latency_count_valid];
+      latency_count_valid++;
     }
   
-    count++;
+    progress_set(5 + (int)(2.0*((double)latency_count_valid / (double)LATENCY_VALID_COUNT)));
+    latency_count++;
   }
 
   // use the median to avoid outliers
@@ -572,6 +731,7 @@ int session_rtt_sync()
     send_control_message(conf.tcp_socket, MSG_TRAIN_LENGTH_SET, ++conf.train_length);
 
     train_count++;
+    progress_set(7 + (int)(8.0*((double)conf.train_length / (double)TRAIN_LENGTH_MAX)));
   }
 
   conf.train_length = TRAIN_LENGTH_MIN + 1;
@@ -593,18 +753,23 @@ int session_rtt_sync()
     ulog(LOG_DEBUG, "Average packet dispersion is less than the calculated packet dispersion minimum.\n"
                     "Assuming a Gb+ link.\n");
 
-    conf.bandwidth_estimated = 1000.0;  
-// TODO: remove when finished testing.
-//    session_end();
+    conf.bandwidth_estimated = 1000.0;
+    conf.bin_width = 0.0;
+    session_end(0);
   } 
     
   fsm_state_set(FSM_PRELIM);
   return 0;
 }
 
-
 int session_prelim()
 {
+  progress_set(15);
+
+  // ignore if we're not in network mode
+  if ( ! (conf.mode & MODE_NET) )
+    return 0;
+
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_PRELIM )
     return 1;
@@ -642,9 +807,7 @@ int session_prelim()
 
       // track the train fails to determine if we're overloading the wire
       if ( train_state != 0 )
-      {
         continue;
-      }
     
       delta = time_delta_us(timestamps[0], timestamps[conf.train_length-1]);
       bandwidth = (double)((conf.train_packet_length_max << 3) * conf.train_length) / delta;
@@ -656,6 +819,8 @@ int session_prelim()
         conf.p1_trains_count++;
 
         prelim_count_valid++;
+        
+        progress_set(15 + (int)(10.0*((double)prelim_count_valid / (double)PRELIM_VALID_COUNT)*((double)conf.train_length/(double)conf.train_length_max)));
       }
       else
         conf.p1_trains_count_discarded++;
@@ -679,11 +844,10 @@ int session_prelim()
                  "  Standard Deviation: %.4f Mbps\n"
                  "  Coefficient of Variance: %.4f\n", conf.p1_trains_count, conf.p1_trains_count + conf.p1_trains_count_discarded, conf.prelim_bw_mean, conf.prelim_bw_std, conf.prelim_bw_std/conf.prelim_bw_mean);
 
-  if ( conf.prelim_bw_std/conf.prelim_bw_mean < BW_COVAR_THRESHOLD )
-  {
-    conf.bandwidth_estimated = conf.prelim_bw_mean;
-    session_end();
-  }
+  conf.bandwidth_assessment = BW_ASSESS_QUICK;
+  conf.bandwidth_estimated = conf.prelim_bw_mean;
+  conf.bandwidth_lo = conf.prelim_bw_mean - conf.prelim_bw_std;
+  conf.bandwidth_hi = conf.prelim_bw_mean + conf.prelim_bw_std;
 
   if ( conf.prelim_bw_mean < 1.0 )
     conf.bin_width = conf.prelim_bw_mean * .25;
@@ -691,6 +855,16 @@ int session_prelim()
     conf.bin_width = conf.prelim_bw_mean * .125;
 
   ulog(LOG_INFO, "Capacity resolution: %.4f\n", conf.bin_width);
+
+  //
+  // if we're performing a quick estimate, or the coefficient of variance
+  // is sufficiently low at this stage, then we can be confident that this
+  // is a reasonsble capacity estimate
+  if ( (conf.prelim_bw_std/conf.prelim_bw_mean < BW_COVAR_THRESHOLD) ||
+       (conf.mode & MODE_QUICK) )
+  {
+    session_end(0);
+  }
 
   fsm_state_set(FSM_P1);
 
@@ -700,6 +874,22 @@ int session_prelim()
 
 int session_p1()
 {
+  progress_set(25);
+
+  // only if we're in network mode
+  if ( ! (conf.mode & MODE_NET) )
+  {
+    if ( session_csv_read(conf.csv_filepath) != 0 )
+      return 1;
+
+    // TODO: remove when saved to file
+    conf.prelim_bw_mean = stat_array_mean(conf.p1_trains_bw, conf.p1_trains_count);
+
+    fsm_state_set(FSM_P1_CALC);
+
+    return ( conf.p1_trains_count > 0) ? 0 : 1;
+  }
+
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_P1 )
     return 1;
@@ -728,7 +918,6 @@ int session_p1()
 
   for (i=0; i<TRAIN_PACKET_LENGTH_SIZES; i++)
   {
-
     // set initial train conditions
     send_control_message(conf.tcp_socket, MSG_TRAIN_ID_SET, train_id);
     send_control_message(conf.tcp_socket, MSG_TRAIN_LENGTH_SET, conf.train_length);
@@ -737,6 +926,8 @@ int session_p1()
     ulog(LOG_INFO, "Train length: %d packets\n"
                     "Packet length: %d bytes\n"
                     "%d%% Complete\n", conf.train_length, conf.train_packet_length, (100 * i / TRAIN_PACKET_LENGTH_SIZES));
+
+    progress_set(25 + (int)(25.0 * ( (double)i / (double)TRAIN_PACKET_LENGTH_SIZES )));
 
     p1_count = 0;
     p1_count_valid = 0;
@@ -749,9 +940,7 @@ int session_p1()
 
       // track the train fails to determine if we're overloading the wire
       if ( train_state != 0 )
-      {
         continue;
-      }
     
       delta = time_delta_us(timestamps[0], timestamps[conf.train_length-1]);
       bandwidth = (double)((conf.train_packet_length_max << 3) * conf.train_length) / delta;
@@ -804,6 +993,8 @@ int session_p1()
 
 int session_p1_calculate()
 {
+  progress_set(50);
+
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_P1_CALC )
     return 1;
@@ -839,6 +1030,16 @@ int session_p1_calculate()
 
 int session_p2()
 {
+  progress_set(60);
+
+  // only if we're not in network mode
+  if ( ! (conf.mode & MODE_NET) )
+  {
+    fsm_state_set(FSM_P2_CALC);
+
+    return ( conf.p2_trains_count > 0) ? 0 : 1;
+  }
+
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_P2 )
     return 1;
@@ -884,6 +1085,8 @@ int session_p2()
       conf.p2_trains_count++;
 
       p2_count_valid++;
+  
+      progress_set(60 + (int)(25.0*((double)p2_count_valid / (double)p2_train_count_required)));
     }
     else
       conf.p2_trains_count_discarded++;
@@ -901,6 +1104,8 @@ int session_p2()
 
 int session_p2_calculate()
 {
+  progress_set(85);
+
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_P2_CALC )
     return 1;
@@ -931,6 +1136,8 @@ int session_p2_calculate()
 
 void session_calculate()
 {
+  progress_set(95);
+
   //
   // calculate the average dispersion rate (ADR) from phase 2
   double adr = stat_array_mean(conf.p2_trains_bw, conf.p2_trains_count);
@@ -1004,32 +1211,189 @@ void session_calculate()
                      conf.p1_modes[merit_max_index].hi, conf.p1_modes[merit_max_index].bell_hi, 
                      conf.p1_modes[merit_max_index].bell_kurtosis, merit_max);
 
+      conf.bandwidth_lo = conf.p1_modes[merit_max_index].lo;
+      conf.bandwidth_hi = conf.p1_modes[merit_max_index].hi;
       conf.bandwidth_estimated = (conf.p1_modes[merit_max_index].lo + conf.p1_modes[merit_max_index].hi) / 2;
+      conf.bandwidth_assessment = BW_ASSESS_MODE;
     }
     else
+    {
       conf.bandwidth_estimated = adr;
+      conf.bandwidth_lo = adr - conf.bin_width;
+      conf.bandwidth_hi = adr + conf.bin_width;
+      conf.bandwidth_assessment = BW_ASSESS_NOMODE;
+    }
   }
   else
   {
     ulog(LOG_INFO, "Phase 1 did not complete, the following estimate is the lower bound of the path.");
     conf.bandwidth_estimated = adr;
+    conf.bandwidth_lo = adr;
+    conf.bandwidth_hi = adr + conf.bin_width;
+    conf.bandwidth_assessment = BW_ASSESS_LBOUND;
   }
-
-
 }
 
-void session_end()
+void result_format_validate(const char *format)
 {
-//  fsm_state_set(FSM_CALC);
+  // be - bandwidth estimated [Mbps]
+  // am - assessment mode (numeric)
+  // AM - assessment mode (literal)
+  // bl - bandwitdh lower bound [Mbps]
+  // bu - bandwitdh upper bound [Mbps]
+  // bw - bandwitdh bin width [Mbps]
+  // pd - packet dispersion minimum [us]
+  // ul - UDP kernel/user latency [us]
+  // pm - preliminary assessed average
+  // ps - preliminary assessed standard deviation
+  
+  const char *fp = format;
+
+  int format_length = strlen(format);
+
+  while ( (fp-format) < format_length )
+  {
+    if ( strncmp(fp, "%be", 3) == 0 ) {}    
+    else if ( strncmp(fp, "%am", 3) == 0 ) {}
+    else if ( strncmp(fp, "%AM", 3) == 0 ) {}
+    else if ( strncmp(fp, "%bl", 3) == 0 ) {}
+    else if ( strncmp(fp, "%bu", 3) == 0 ) {}
+    else if ( strncmp(fp, "%bw", 3) == 0 ) {}
+    else if ( strncmp(fp, "%pd", 3) == 0 ) {}
+    else if ( strncmp(fp, "%ul", 3) == 0 ) {}
+    else if ( strncmp(fp, "%pm", 3) == 0 ) {}
+    else if ( strncmp(fp, "%ps", 3) == 0 ) {}
+    else
+    {
+      fprintf(stderr, "FATAL: Undefined format \"%s\" specified!\n", fp);
+      exit(1);
+    }
+      
+    fp+=3; 
+  }
+}
+
+void result_format_write(FILE *fd, const char *format)
+{
+  // be - bandwidth estimated [Mbps]
+  // am - assessment mode (numeric)
+  // AM - assessment mode (literal)
+  // bl - bandwitdh lower bound [Mbps]
+  // bu - bandwitdh upper bound [Mbps]
+  // bw - bandwitdh bin width [Mbps]
+  // pd - packet dispersion minimum [us]
+  // ul - UDP kernel/user latency [us]
+  // pm - preliminary assessed average
+  // ps - preliminary assessed standard deviation
+  
+  const char *fp = format;
+  int format_length = strlen(format);
+
+  while ( (fp-format) < format_length )
+  {
+    if ( fp > format )
+      fprintf(stdout, ",");
+
+    if ( strncmp(fp, "%be", 3) == 0 )
+      fprintf(fd, "%.4f", conf.bandwidth_estimated);
+    else if ( strncmp(fp, "%am", 3) == 0 )
+      fprintf(fd, "%d", conf.bandwidth_assessment);
+    else if ( strncmp(fp, "%AM", 3) == 0 )
+      fprintf(fd, "%s", assessment_mode_literal_get(conf.bandwidth_assessment));
+    else if ( strncmp(fp, "%bl", 3) == 0 )
+      fprintf(fd, "%.4f", conf.bandwidth_lo);
+    else if ( strncmp(fp, "%bu", 3) == 0 )
+      fprintf(fd, "%.4f", conf.bandwidth_hi);
+    else if ( strncmp(fp, "%bw", 3) == 0 )
+      fprintf(fd, "%.4f", conf.bin_width);
+    else if ( strncmp(fp, "%pd", 3) == 0 )
+      fprintf(fd, "%.4f", conf.packet_dispersion_delta_min);
+    else if ( strncmp(fp, "%ul", 3) == 0 )
+      fprintf(fd, "%.4f", conf.latency_udp_kernel_user_average);
+    else if ( strncmp(fp, "%pm", 3) == 0 )
+      fprintf(fd, "%.4f", conf.prelim_bw_mean);
+    else if ( strncmp(fp, "%ps", 3) == 0 )
+      fprintf(fd, "%.4f", conf.prelim_bw_std);
+      
+    fp+=3; 
+  }
  
-  // CSV line of the form
-  // bandwidth (est), bin_width, packet pair dispersion minimum, UDP kernel/user space latency
-  fprintf(stdout, "%.4f,%.4f,%.4f,%.4f\n", conf.bandwidth_estimated, conf.bin_width, conf.packet_dispersion_delta_min, conf.latency_udp_kernel_user_average);
+  fprintf(fd, "\n");
+}
 
-  if ( conf.mode == MODE_NET )
-    session_csv_write(conf.csv_filepath);
+const char * fsm_state_literal_get()
+{
+  switch (fsm_state)
+  {
+    case FSM_INIT:
+      return "INIT";
+    case FSM_RTT_SYNC:
+      return "RTT_SYNC";
+    case FSM_PRELIM:
+      return "PRELIM";
+    case FSM_P1:
+      return "P1";
+    case FSM_P1_CALC:
+      return "P1_CALC";
+    case FSM_P2:
+      return "P2";
+    case FSM_P2_CALC:
+      return "P2_CALC";
+    case FSM_CALC:
+      return "CALC";
+    case FSM_CLOSE:
+      return "CLOSE";
+    case FSM_END:
+      return "END";
+  }
 
-  exit_clean(0);
+  return "UNKNOWN";
+}
+
+const char * assessment_mode_literal_get(int mode)
+{
+  switch (mode)
+  {
+    case BW_ASSESS_MODE:
+      return "MODE";
+    case BW_ASSESS_NOMODE:
+      return "NO MODE";
+    case BW_ASSESS_LBOUND:
+      return "LBOUND";
+    case BW_ASSESS_QUICK:
+      return "QUICK";
+  }
+
+  return "UNKNOWN";
+}
+
+void session_end(int exit_code)
+{
+  progress_set(98);
+ 
+  // write the result if exit code is normal 
+  if ( exit_code == 0 )
+    result_format_write(stdout, conf.assessment_format);
+
+  if ( (NULL != conf.csv_out_filepath) &&
+       (conf.mode & MODE_NET) )
+    session_csv_write(conf.csv_out_filepath);
+
+  // tell daemon we're bailing out
+  if ( (fsm_state_get() != FSM_INIT) && 
+       (conf.mode & MODE_NET) )
+  {
+    fsm_state_set(FSM_CLOSE);
+
+    send_control_message(conf.tcp_socket, MSG_SESSION_END, (uint32_t)(exit_code & 0xffffffff));
+
+    if ( conf.tcp_socket > 0 )
+      close(conf.tcp_socket);
+  }
+
+  fsm_state_set(FSM_END);
+
+  exit(exit_code);
 }
 
 int session_csv_write(const char *filepath)
@@ -1038,7 +1402,7 @@ int session_csv_write(const char *filepath)
   int i;
   FILE *fp;
 
-  if ( (fp=fopen("/tmp/test.csv", "w")) == NULL )
+  if ( (fp=fopen(filepath, "w")) == NULL )
     return 1;
 
   //
@@ -1135,14 +1499,10 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
   while ( select(max_fd + 1, &read_fds, NULL, NULL, &t_select) > 0)
   {
     if ( FD_ISSET(conf.udp_socket, &read_fds) )
-    {
       n = recvfrom(conf.udp_socket, packet_buffer, packet_length, 0, (struct sockaddr *)&conf.udp_addr, &opt_len);
-    }
 
     if ( FD_ISSET(conf.tcp_socket, &read_fds) )
-    {
       receive_control_message(conf.tcp_socket, &c_code, &c_value); 
-    }
       
     FD_SET(conf.udp_socket, &read_fds);
     FD_SET(conf.tcp_socket, &read_fds);
@@ -1162,8 +1522,11 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
 
     if ( (p=select(max_fd + 1, &read_fds, NULL, NULL, &t_select)) == -1 )
     {
-      perror("Select error: ");
-      exit_clean(1);      
+      if ( errno != EINTR )
+      {
+        perror("Select error: ");
+        session_end(1);
+      }
     } 
 
 //    ulog(LOG_DEBUG, "select: %d\n", p);
@@ -1216,9 +1579,7 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
 
     // timeout
     if ( p == 0 )
-    {
       processing = 0;
-    } 
   }
 
   if (expected_packet_id == length)
@@ -1234,10 +1595,18 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
     train_state = 1;
   }
 
-
   return train_state;
 }
 
+void progress_set(int progress)
+{
+  conf.progress = progress;
+}
+
+int progress_get()
+{
+  return conf.progress;
+}
 
 int calculate_mode(double array_ordered[], short array_valid[], int elements, double bin_width, struct mode_s *mode)
 {
@@ -1280,7 +1649,7 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
 
   // no trains level for classification
   if ( j == 0 )
-      return -1;
+    return -1;
 
   ulog(LOG_DEBUG, "Calculating modes...\n");
   ulog(LOG_DEBUG, "  Unclassified values: %d\n", j);
@@ -1396,10 +1765,7 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
         bin_hi = array_ordered[bin_index_hi];
       }
       else
-      {
         processing = 0;
-//        ulog(LOG_DEBUG, "    Outside MODE\n");
-      } 
     }
     else
       processing = 0;
@@ -1437,7 +1803,7 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
           rbin_count = count;
           rbin_index_lo = i;
           rbin_index_hi = j-1;
-        }
+ }
       }
     }
 
@@ -1465,10 +1831,7 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
         bin_hi = array_ordered[bin_index_hi];
       }
       else
-      {
         processing = 0;
-//        ulog(LOG_DEBUG, "    Outside MODE\n");
-      } 
     }
     else
       processing = 0;
@@ -1499,19 +1862,4 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
   }
 
   return 0;
-}
-
-
-void exit_clean(int exit_code)
-{
-  // tell daemon we're bailing out
-  if ( fsm_state_get() != FSM_INIT && conf.mode == MODE_NET)
-  {
-    send_control_message(conf.tcp_socket, MSG_SESSION_END, (uint32_t)(exit_code & 0xffffffff));
-
-    if ( conf.tcp_socket > 0 )
-      close(conf.tcp_socket);
-  }
-
-  exit(exit_code);
 }
