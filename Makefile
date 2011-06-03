@@ -2,7 +2,7 @@ CC=gcc
 
 CFLAGS=-g -O2 -DDEBUG
 CPPFLAGS=
-LIBS=-lnsl -lm -pthread 
+LIBS=-lm
 LDFLAGS=
 
 SRC= locod.c locod.h \
