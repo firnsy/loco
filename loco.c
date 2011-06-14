@@ -16,7 +16,7 @@
 
 #include <fcntl.h>
 
-#include <netdb.h> 
+#include <netdb.h>
 
 #include "common.h"
 #include "debug.h"
@@ -76,8 +76,8 @@ struct config_s
   double prelim_bw_mean;
   double prelim_bw_std;
   int prelim_trains_count;
-   
-  // phase 1 
+
+  // phase 1
 
   int p1_train_packet_length;
   int p1_train_packet_length_min;
@@ -206,7 +206,7 @@ void signal_handler(int signal)
   // sigpipe is likely the client died so just abort the connection
   if ( signal == SIGUSR1 )
     fprintf(stderr, "%d%%,%s,%.4f\n", progress_get(), fsm_state_literal_get(), conf.bandwidth_estimated);
-  else if ( (signal == SIGTERM) || 
+  else if ( (signal == SIGTERM) ||
             (signal == SIGINT)  ||
             (signal == SIGPIPE) )
     session_end(1);
@@ -387,7 +387,7 @@ void usage(const char *program_name)
 }
 
 
-int session_init() 
+int session_init()
 {
   // only valid if we're initialising
   if ( fsm_state_get() != FSM_INIT )
@@ -460,18 +460,18 @@ int session_net_init()
   // TCP SOCKET INIT
 
   conf.tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
-  if (conf.tcp_socket < 0) 
+  if (conf.tcp_socket < 0)
     session_end(1);
 
   /* build the server's Internet address */
   bzero((char *)&conf.tcp_addr, sizeof(conf.tcp_addr));
   conf.tcp_addr.sin_family = AF_INET;
-  bcopy((char *)conf.server->h_addr, 
+  bcopy((char *)conf.server->h_addr,
         (char *)&conf.tcp_addr.sin_addr.s_addr, conf.server->h_length);
   conf.tcp_addr.sin_port = htons(conf.tcp_port);
 
   if ( connect(conf.tcp_socket, (struct sockaddr *)&conf.tcp_addr, sizeof(conf.tcp_addr)) < 0 )
-  { 
+  {
     fprintf(stderr, "Unable to connect on TCP socket.\n");
     session_end(1);
   }
@@ -486,7 +486,7 @@ int session_net_init()
   // UDP SOCKET INIT
 
   conf.udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-  if (conf.udp_socket < 0) 
+  if (conf.udp_socket < 0)
     exit(1);
 
   /* build the server's Internet address */
@@ -543,10 +543,10 @@ int session_rtt_sync()
 
   while(valid_count < RTT_VALID_COUNT && count < RTT_COUNT_MAX)
   {
-    gettimeofday(&t_mark1, (struct timezone*)0); 
+    gettimeofday(&t_mark1, (struct timezone*)0);
     send_control_message(conf.tcp_socket, MSG_RTT_SYNC, count);
     receive_control_message(conf.tcp_socket, &ctl_code, &ctl_value);
-    gettimeofday(&t_mark2, (struct timezone*)0); 
+    gettimeofday(&t_mark2, (struct timezone*)0);
 
     if ( (count > 0) &&
          (ctl_value == (0xffffff-count)) )
@@ -561,7 +561,7 @@ int session_rtt_sync()
   if ( count == RTT_COUNT_MAX )
   {
     ulog(LOG_ERROR, "Unable to calculate RTT, too many failures.\n");
-    return 1; 
+    return 1;
   }
 
   // store calculated average
@@ -607,7 +607,7 @@ int session_rtt_sync()
   // we need to remove the average user/kernel latency from our final
   // measurement.
   //
- 
+
   ulog(LOG_INFO, "[I] UDP kernel/userspace latency detection ...\n");
 
   int n;
@@ -630,10 +630,10 @@ int session_rtt_sync()
 
   while ( latency_count_valid < LATENCY_VALID_COUNT && latency_count < LATENCY_COUNT_MAX )
   {
-    gettimeofday(&t_mark1, (struct timezone*)0); 
+    gettimeofday(&t_mark1, (struct timezone*)0);
     sendto(conf.udp_socket, packet_random, conf.train_packet_length_max, 0, (struct sockaddr *)&conf.udp_addr, sizeof(struct sockaddr_in));
     n = recvfrom(conf.udp_socket, packet_random, conf.train_packet_length_max, 0, (struct sockaddr *)&conf.udp_addr, &opt_len);
-    gettimeofday(&t_mark2, (struct timezone*)0); 
+    gettimeofday(&t_mark2, (struct timezone*)0);
 
     if ( (latency_count > 0) &&
          (n == conf.train_packet_length_max) )
@@ -642,7 +642,7 @@ int session_rtt_sync()
       latency_total_time += packet_deltas[latency_count_valid];
       latency_count_valid++;
     }
-  
+
     progress_set(5 + (int)(2.0*((double)latency_count_valid / (double)LATENCY_VALID_COUNT)));
     latency_count++;
   }
@@ -660,7 +660,7 @@ int session_rtt_sync()
   }
 
   conf.latency_udp_kernel_user_average = (latency_total_time / (double)LATENCY_VALID_COUNT / 2.0);
-  
+
   ulog(LOG_INFO, "Average UDP kernel/user latency: %.4fus\n", conf.latency_udp_kernel_user_average);
 
 
@@ -710,7 +710,7 @@ int session_rtt_sync()
 
       continue;
     }
-    
+
     delta = time_delta_us(timestamps[0], timestamps[conf.train_length-1]);
     bandwidth = (double)((conf.train_packet_length_max << 3) * conf.train_length) / delta;
 
@@ -722,7 +722,7 @@ int session_rtt_sync()
     }
     else
       conf.p1_trains_count_discarded++;
- 
+
     ulog(LOG_DEBUG, "Sent train of length: %u packets\n"
                     "  Received state: %d\n"
                     "  Detected bandwith: %f Mbps\n", conf.train_length, train_state, bandwidth);
@@ -746,9 +746,19 @@ int session_rtt_sync()
   //
   // let's do a quick check to detect any interrupt coalescence
   // this will likely indicate a Gb+ link and we can bail early
-  // 
+  //
   // 60% of measurements not stored
-  if ( conf.p1_trains_count <= (int)((double)train_count * 0.4) )
+  if ( conf.p1_trains_count == 0 )
+  {
+    ulog(LOG_INFO, "No UDP trains have been received. No effective estimate is possible at this time.\n");
+    ulog(LOG_DEBUG, "Possible causes include:\n"
+            " - UDP port %d is being blocked in the path, or\n"
+            " - Network path is heavily congested.\n", conf.udp_port );
+    conf.bandwidth_estimated = -1.0;
+    conf.bin_width = -1.0;
+    session_end(0);
+  }
+  else if (conf.p1_trains_count <= (int)((double)train_count * 0.4) )
   {
     ulog(LOG_DEBUG, "Average packet dispersion is less than the calculated packet dispersion minimum.\n"
                     "Assuming a Gb+ link.\n");
@@ -756,8 +766,8 @@ int session_rtt_sync()
     conf.bandwidth_estimated = 1000.0;
     conf.bin_width = 0.0;
     session_end(0);
-  } 
-    
+  }
+
   fsm_state_set(FSM_PRELIM);
   return 0;
 }
@@ -808,7 +818,7 @@ int session_prelim()
       // track the train fails to determine if we're overloading the wire
       if ( train_state != 0 )
         continue;
-    
+
       delta = time_delta_us(timestamps[0], timestamps[conf.train_length-1]);
       bandwidth = (double)((conf.train_packet_length_max << 3) * conf.train_length) / delta;
 
@@ -819,12 +829,12 @@ int session_prelim()
         conf.p1_trains_count++;
 
         prelim_count_valid++;
-        
+
         progress_set(15 + (int)(10.0*((double)prelim_count_valid / (double)PRELIM_VALID_COUNT)*((double)conf.train_length/(double)conf.train_length_max)));
       }
       else
         conf.p1_trains_count_discarded++;
- 
+
       ulog(LOG_DEBUG, "Sent train of length: %u packets\n"
                       "  Detected bandwith: %f Mbps\n", conf.train_length, bandwidth);
 
@@ -941,7 +951,7 @@ int session_p1()
       // track the train fails to determine if we're overloading the wire
       if ( train_state != 0 )
         continue;
-    
+
       delta = time_delta_us(timestamps[0], timestamps[conf.train_length-1]);
       bandwidth = (double)((conf.train_packet_length_max << 3) * conf.train_length) / delta;
 
@@ -955,7 +965,7 @@ int session_p1()
       }
       else
         conf.p1_trains_count_discarded++;
- 
+
       ulog(LOG_DEBUG, "  Detected bandwith: %.4f Mbps (%.2f, %.2f)\n", bandwidth, delta, conf.packet_dispersion_delta_min);
 
       send_control_message(conf.tcp_socket, MSG_TRAIN_ID_SET, ++train_id);
@@ -974,7 +984,7 @@ int session_p1()
       }
 
       ulog(LOG_DEBUG, "Too many discarded trains, adjusting parameters.\n");
-    }    
+    }
     else
     {
       // increment packet length
@@ -1074,7 +1084,7 @@ int session_p2()
     // track the train fails to determine if we're overloading the wire
     if ( train_state != 0 )
       continue;
-    
+
     delta = time_delta_us(timestamps[0], timestamps[conf.train_length-1]);
     bandwidth = (double)((conf.train_packet_length_max << 3) * conf.train_length) / delta;
 
@@ -1085,12 +1095,12 @@ int session_p2()
       conf.p2_trains_count++;
 
       p2_count_valid++;
-  
+
       progress_set(60 + (int)(25.0*((double)p2_count_valid / (double)p2_train_count_required)));
     }
     else
       conf.p2_trains_count_discarded++;
- 
+
     ulog(LOG_DEBUG, "Sent train of length: %u packets\n"
                     "  Detected bandwith: %f Mbps\n", conf.train_length, bandwidth);
 
@@ -1098,7 +1108,7 @@ int session_p2()
   }
 
   fsm_state_set(FSM_P2_CALC);
-  
+
   return 0;
 }
 
@@ -1149,7 +1159,7 @@ void session_calculate()
                  "  Coefficient of Variance: %.4f\n", adr, adr_std, adr_std/adr);
 
   if ( conf.p2_modes_count == 1 &&
-       adr_std/adr < BW_COVAR_THRESHOLD && 
+       adr_std/adr < BW_COVAR_THRESHOLD &&
        adr / conf.prelim_bw_mean < ADR_THRESHOLD )
   {
     adr = (conf.p2_modes[0].hi + conf.p2_modes[1].lo) / 2;
@@ -1162,7 +1172,7 @@ void session_calculate()
     double merit_max = 0.0;
     int i;
     int merit_max_index = 0;
-    
+
     for (i=0; i<conf.p2_modes_count; i++)
     {
        merit = conf.p2_modes[i].bell_kurtosis * ((double)conf.p2_modes[i].count / (double)conf.p2_trains_count);
@@ -1184,7 +1194,7 @@ void session_calculate()
     double merit_max = 0.0;
     int i;
     int merit_max_index = 0;
-    
+
     for (i=0; i<conf.p1_modes_count; i++)
     {
       if ( conf.p1_modes[i].hi > adr )
@@ -1205,10 +1215,10 @@ void session_calculate()
                      "  Count: %d (%d)\n"
                      "  Range: %.4f (%.4f) <=> %.4f (%.4f)\n"
                      "  Kurtosis: %.4f\n"
-                     "  Merit: %.4f\n", 
+                     "  Merit: %.4f\n",
                      conf.p1_modes[merit_max_index].count, conf.p1_modes[merit_max_index].bell_count,
                      conf.p1_modes[merit_max_index].lo, conf.p1_modes[merit_max_index].bell_lo,
-                     conf.p1_modes[merit_max_index].hi, conf.p1_modes[merit_max_index].bell_hi, 
+                     conf.p1_modes[merit_max_index].hi, conf.p1_modes[merit_max_index].bell_hi,
                      conf.p1_modes[merit_max_index].bell_kurtosis, merit_max);
 
       conf.bandwidth_lo = conf.p1_modes[merit_max_index].lo;
@@ -1246,14 +1256,14 @@ void result_format_validate(const char *format)
   // ul - UDP kernel/user latency [us]
   // pm - preliminary assessed average
   // ps - preliminary assessed standard deviation
-  
+
   const char *fp = format;
 
   int format_length = strlen(format);
 
   while ( (fp-format) < format_length )
   {
-    if ( strncmp(fp, "%be", 3) == 0 ) {}    
+    if ( strncmp(fp, "%be", 3) == 0 ) {}
     else if ( strncmp(fp, "%am", 3) == 0 ) {}
     else if ( strncmp(fp, "%AM", 3) == 0 ) {}
     else if ( strncmp(fp, "%bl", 3) == 0 ) {}
@@ -1268,8 +1278,8 @@ void result_format_validate(const char *format)
       fprintf(stderr, "FATAL: Undefined format \"%s\" specified!\n", fp);
       exit(1);
     }
-      
-    fp+=3; 
+
+    fp+=3;
   }
 }
 
@@ -1285,7 +1295,7 @@ void result_format_write(FILE *fd, const char *format)
   // ul - UDP kernel/user latency [us]
   // pm - preliminary assessed average
   // ps - preliminary assessed standard deviation
-  
+
   const char *fp = format;
   int format_length = strlen(format);
 
@@ -1314,10 +1324,10 @@ void result_format_write(FILE *fd, const char *format)
       fprintf(fd, "%.4f", conf.prelim_bw_mean);
     else if ( strncmp(fp, "%ps", 3) == 0 )
       fprintf(fd, "%.4f", conf.prelim_bw_std);
-      
-    fp+=3; 
+
+    fp+=3;
   }
- 
+
   fprintf(fd, "\n");
 }
 
@@ -1370,8 +1380,8 @@ const char * assessment_mode_literal_get(int mode)
 void session_end(int exit_code)
 {
   progress_set(98);
- 
-  // write the result if exit code is normal 
+
+  // write the result if exit code is normal
   if ( exit_code == 0 )
     result_format_write(stdout, conf.assessment_format);
 
@@ -1380,7 +1390,7 @@ void session_end(int exit_code)
     session_csv_write(conf.csv_out_filepath);
 
   // tell daemon we're bailing out
-  if ( (fsm_state_get() != FSM_INIT) && 
+  if ( (fsm_state_get() != FSM_INIT) &&
        (conf.mode & MODE_NET) )
   {
     fsm_state_set(FSM_CLOSE);
@@ -1407,7 +1417,7 @@ int session_csv_write(const char *filepath)
 
   //
   // dump phase 1 results
- 
+
   // dump the total count we have
   fprintf(fp, "%d\n", conf.p1_trains_count);
 
@@ -1416,7 +1426,7 @@ int session_csv_write(const char *filepath)
 
   //
   // dump phase 2 results
- 
+
   // dump the total count we have
   fprintf(fp, "%d\n", conf.p2_trains_count);
 
@@ -1438,7 +1448,7 @@ int session_csv_read(const char *filepath)
 
   //
   // read phase 1 results
- 
+
   fscanf(fp, "%d", &conf.p1_trains_count);
 
   ulog(LOG_DEBUG, "Reading %d values ...\n", conf.p1_trains_count);
@@ -1448,7 +1458,7 @@ int session_csv_read(const char *filepath)
 
   //
   // read phase 2 results
- 
+
   fscanf(fp, "%d", &conf.p2_trains_count);
 
   ulog(LOG_DEBUG, "Reading %d values ...\n", conf.p2_trains_count);
@@ -1472,7 +1482,7 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
   int processing = 1;
   int train_sent = 0;
   int n = 0;
-  
+
   uint32_t c_code, c_value;
 
   uint32_t expected_packet_id = 0;
@@ -1502,8 +1512,8 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
       n = recvfrom(conf.udp_socket, packet_buffer, packet_length, 0, (struct sockaddr *)&conf.udp_addr, &opt_len);
 
     if ( FD_ISSET(conf.tcp_socket, &read_fds) )
-      receive_control_message(conf.tcp_socket, &c_code, &c_value); 
-      
+      receive_control_message(conf.tcp_socket, &c_code, &c_value);
+
     FD_SET(conf.udp_socket, &read_fds);
     FD_SET(conf.tcp_socket, &read_fds);
   }
@@ -1527,7 +1537,7 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
         perror("Select error: ");
         session_end(1);
       }
-    } 
+    }
 
 //    ulog(LOG_DEBUG, "select: %d\n", p);
 
@@ -1566,7 +1576,7 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
     if ( FD_ISSET(conf.tcp_socket, &read_fds) )
     {
 //      ulog(LOG_DEBUG, "Got end signal\n");
-      receive_control_message(conf.tcp_socket, &c_code, &c_value); 
+      receive_control_message(conf.tcp_socket, &c_code, &c_value);
 
       if ( c_code == MSG_TRAIN_SENT )
       {
@@ -1591,7 +1601,7 @@ int receive_train(uint32_t train_id, int length, int packet_length, struct timev
   {
     /* send signal to recv_train */
     send_control_message(conf.tcp_socket, MSG_TRAIN_RECEIVE_FAIL, 0);
-          
+
     train_state = 1;
   }
 
@@ -1655,13 +1665,13 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
   ulog(LOG_DEBUG, "  Unclassified values: %d\n", j);
 
   // initialise the struct
-  mode->count = 0; 
-  mode->lo = 0; 
-  mode->hi = 0; 
-  mode->bell_count = 0; 
-  mode->bell_lo = 0; 
-  mode->bell_hi = 0; 
-  mode->bell_kurtosis = 0; 
+  mode->count = 0;
+  mode->lo = 0;
+  mode->hi = 0;
+  mode->bell_count = 0;
+  mode->bell_lo = 0;
+  mode->bell_hi = 0;
+  mode->bell_kurtosis = 0;
 
   //
   // find the bin of the primary mode from unclassified trains
@@ -1688,7 +1698,7 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
   mode_lo = array_ordered[mode_index_lo];
   mode_hi = array_ordered[mode_index_hi];
 
-  
+
   ulog(LOG_DEBUG, "  Central bin:\n"
                   "    Range: %.4f (%d) <=> %.4f (%d)\n"
                   "    Count: %d\n", mode_lo, mode_index_lo, mode_hi, mode_index_hi, count);
@@ -1701,8 +1711,8 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
   mode->bell_lo = mode_lo;
   mode->bell_hi = mode_hi;
 
-  bell_index_lo = mode_index_lo; 
-  bell_index_hi = mode_index_hi; 
+  bell_index_lo = mode_index_lo;
+  bell_index_hi = mode_index_hi;
 
   //
   // find all bins to the left of the primary that are part of the same modes bell.
@@ -1752,7 +1762,7 @@ int calculate_mode(double array_ordered[], short array_valid[], int elements, do
 //                        "    Count: %d\n", array_ordered[lbin_index_lo], lbin_index_lo, array_ordered[lbin_index_hi], lbin_index_hi, lbin_count);
 
         mode->bell_count += (bin_index_lo-lbin_index_lo);
-        bell_index_lo = lbin_index_lo;            
+        bell_index_lo = lbin_index_lo;
         mode->bell_lo = array_ordered[bell_index_lo];
 
         // reset counters for next iteration
