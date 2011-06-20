@@ -1,4 +1,5 @@
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -18,8 +19,14 @@
 
 #include <netdb.h>
 
+#include <ifaddrs.h>
+
+
 #include "common.h"
 #include "debug.h"
+
+
+
 
 struct mode_s
 {
@@ -42,9 +49,12 @@ struct config_s
 
   int tcp_socket;
   int tcp_port;
-  struct sockaddr_in tcp_addr;
+  struct sockaddr_in tcp_addr, tcp_server_addr;
 
   int progress;
+
+  char interface[NI_MAXHOST];
+  struct sockaddr_in if_addr;
 
   char *hostname;
   struct hostent *server;
@@ -248,13 +258,18 @@ int parse_cmdline(int argc, char **argv)
     {"format", 1, NULL, 'f'},
     {"host", 1, NULL, 'h'},
     {"quick", 0, NULL, 'q'},
+    {"interface", 1, NULL, 'I'},
     {0, 0, 0, 0}
   };
 
-  while( (c=getopt_long(argc, argv, "?b:f:h:p:qr:w:QV", long_options, &long_option_index)) != EOF )
+  while( (c=getopt_long(argc, argv, "?b:f:h:p:qr:w:I:V", long_options, &long_option_index)) != EOF )
   {
     switch (c)
     {
+      case 'I':
+        snprintf(conf.interface, NI_MAXHOST, "%s", optarg);
+        conf.mode |= MODE_NET_BIND;
+        break;
       case '?':
         usage(argv[0]);
         exit(0);
@@ -358,6 +373,7 @@ void usage(const char *program_name)
   fprintf(stdout, "\n");
   fprintf(stdout, " Online Options:\n");
   fprintf(stdout, "  -h <hostname> Specify the testing server's hostname to coordinate with.\n");
+  fprintf(stdout, "  -I <iface>    Specify the interface to bind traffic on.\n");
   fprintf(stdout, "  -q            Force a quick (most likely less accurate) assessment.\n");
   fprintf(stdout, "  -w <file>     Specify file for writing of collected metric data. (Default: /tmp/loco.csv)\n");
   fprintf(stdout, "\n");
@@ -370,6 +386,7 @@ void usage(const char *program_name)
   fprintf(stdout, "  --version     Same as 'V'\n");
   fprintf(stdout, "  --format      Same as 'f'\n");
   fprintf(stdout, "  --host        Same as 'h'\n");
+  fprintf(stdout, "  --interface   Same as 'I'\n");
   fprintf(stdout, "  --quick       Same as 'q'\n");
   fprintf(stdout, "\n");
   fprintf(stdout, " Format Options:\n");
@@ -453,58 +470,134 @@ int session_net_init()
   if (conf.server == NULL)
   {
     fprintf(stderr,"ERROR, no such host as %s\n", conf.hostname);
-    session_end(1);
+    exit(1);
   }
 
   //
-  // TCP SOCKET INIT
+  // TCP/UDP SOCKET INIT
 
   conf.tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
   if (conf.tcp_socket < 0)
-    session_end(1);
-
-  /* build the server's Internet address */
-  bzero((char *)&conf.tcp_addr, sizeof(conf.tcp_addr));
-  conf.tcp_addr.sin_family = AF_INET;
-  bcopy((char *)conf.server->h_addr,
-        (char *)&conf.tcp_addr.sin_addr.s_addr, conf.server->h_length);
-  conf.tcp_addr.sin_port = htons(conf.tcp_port);
-
-  if ( connect(conf.tcp_socket, (struct sockaddr *)&conf.tcp_addr, sizeof(conf.tcp_addr)) < 0 )
-  {
-    fprintf(stderr, "Unable to connect on TCP socket.\n");
-    session_end(1);
-  }
-
-  int tcp_flags = fcntl(conf.tcp_socket, F_GETFL, 0);
-  fcntl(conf.tcp_socket, tcp_flags | O_NONBLOCK);
-
-  // TCP SOCKET INIT - END
-  //
-
-  //
-  // UDP SOCKET INIT
+    exit(1);
 
   conf.udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
   if (conf.udp_socket < 0)
     exit(1);
 
-  /* build the server's Internet address */
+  /* bondage time */
+  if ( conf.mode & MODE_NET_BIND )
+  {
+    struct ifaddrs *ifaddr, *ifa;
+    int family;
+    int can_bind = 0;
+
+    if (getifaddrs(&ifaddr) == -1)
+    {
+      perror("getifaddrs");
+      session_end(1);
+    }
+
+    // assume we have been given an interface name first
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+    {
+      if (ifa->ifa_addr == NULL)
+        continue;
+
+      family = ifa->ifa_addr->sa_family;
+
+      if ( strcmp(ifa->ifa_name, conf.interface) == 0 )
+      {
+        /* IPv4 only for now */
+        if (family == AF_INET )
+        {
+          if ( getnameinfo(ifa->ifa_addr,
+                  (family == AF_INET) ? sizeof(struct sockaddr_in) :
+                  sizeof(struct sockaddr_in6),
+                  conf.interface, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0 )
+          {
+            can_bind = 1;
+            break;
+          }
+          else
+            fprintf(stderr, "No address associated with specified interface.\n");
+        }
+      }
+    }
+    
+    freeifaddrs(ifaddr);
+
+    // assume we have a host name or IP address
+    if ( ! can_bind )
+    {
+      struct addrinfo *ai;
+      struct addrinfo hints;
+      memset(&hints, '\0', sizeof(hints));
+
+      hints.ai_flags = AI_NUMERICHOST;
+      hints.ai_family = AF_INET;
+      hints.ai_socktype = SOCK_STREAM;
+
+      int ret;
+      if ( (ret=getaddrinfo(conf.interface, NULL, &hints, &ai)) == 0 )
+      {
+        can_bind = 1;
+        memcpy(&conf.tcp_addr, ai->ai_addr, ai->ai_addrlen);
+      }
+    }
+
+    if ( can_bind )
+    {
+      fprintf(stderr, "Binding to: %s\n", conf.interface);
+
+      if ( bind(conf.tcp_socket, (struct sockaddr *)&conf.tcp_addr, sizeof(conf.tcp_addr)) < 0 )
+      {
+        perror("TCP bind(): ");
+        session_end(1);
+      }
+    }
+    else
+    {
+      fprintf(stderr, "Can't bind on specified interface/hostname.\n");
+      session_end(1);
+    }
+  }
+
+  /* bind UDP listener on any interface, server will respond to whatever the TCP is bonded to */
   bzero((char *) &conf.udp_addr, sizeof(conf.udp_addr));
   conf.udp_addr.sin_family = AF_INET;
   conf.udp_addr.sin_addr.s_addr = htonl(INADDR_ANY);
   conf.udp_addr.sin_port = htons(conf.udp_port);
 
+  /* build the server's Internet address */
   if ( bind(conf.udp_socket, (struct sockaddr *)&conf.udp_addr, sizeof(conf.udp_addr)) < 0 )
   {
-    perror("bind(): ");
-    exit(1);
+    perror("UDP bind(): ");
+    session_end(1);
   }
+
+  /* build the server's Internet address */
+  bzero((char *)&conf.tcp_server_addr, sizeof(conf.tcp_server_addr));
+  conf.tcp_server_addr.sin_family = AF_INET;
+  bcopy((char *)conf.server->h_addr,
+        (char *)&conf.tcp_server_addr.sin_addr.s_addr, conf.server->h_length);
+  conf.tcp_server_addr.sin_port = htons(conf.tcp_port);
+
+  /* connect */
+  if ( connect(conf.tcp_socket, (struct sockaddr *)&conf.tcp_server_addr, sizeof(conf.tcp_server_addr)) < 0 )
+  {
+    fprintf(stderr, "Unable to connect on TCP socket.\n");
+    session_end(1);
+  }
+
+  /* don't block on the connected socets */
+  int tcp_flags = fcntl(conf.tcp_socket, F_GETFL, 0);
+  fcntl(conf.tcp_socket, tcp_flags | O_NONBLOCK);
 
   int udp_flags = fcntl(conf.udp_socket, F_GETFL, 0);
   fcntl(conf.udp_socket, udp_flags | O_NONBLOCK);
 
-  // UDP SOCKET INIT - END
+
+  // TCP/UDP SOCKET INIT - END
   //
 
   send_control_message(conf.tcp_socket, MSG_SESSION_INIT, 0);
@@ -1440,7 +1533,7 @@ int session_csv_write(const char *filepath)
 
 int session_csv_read(const char *filepath)
 {
-  int i;
+  int i, n;
   FILE *fp;
 
   if ( (fp=fopen(filepath, "r")) == NULL )
@@ -1449,22 +1542,22 @@ int session_csv_read(const char *filepath)
   //
   // read phase 1 results
 
-  fscanf(fp, "%d", &conf.p1_trains_count);
+  n = fscanf(fp, "%d", &conf.p1_trains_count);
 
   ulog(LOG_DEBUG, "Reading %d values ...\n", conf.p1_trains_count);
 
   for (i=0; i<conf.p1_trains_count; i++)
-    fscanf(fp, "%lf,%lf", &conf.p1_trains_bw[i], &conf.p1_trains_delta[i]);
+    n = fscanf(fp, "%lf,%lf", &conf.p1_trains_bw[i], &conf.p1_trains_delta[i]);
 
   //
   // read phase 2 results
 
-  fscanf(fp, "%d", &conf.p2_trains_count);
+  n = fscanf(fp, "%d", &conf.p2_trains_count);
 
   ulog(LOG_DEBUG, "Reading %d values ...\n", conf.p2_trains_count);
 
   for (i=0; i<conf.p2_trains_count; i++)
-    fscanf(fp, "%lf,%lf", &conf.p2_trains_bw[i], &conf.p2_trains_delta[i]);
+    n = fscanf(fp, "%lf,%lf", &conf.p2_trains_bw[i], &conf.p2_trains_delta[i]);
 
   fclose(fp);
 

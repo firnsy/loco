@@ -44,10 +44,11 @@
 
 
 // OPERATING MODE
-#define MODE_HELP  1
-#define MODE_NET   2
-#define MODE_CSV   4
-#define MODE_QUICK 8
+#define MODE_HELP       0x01
+#define MODE_NET        0x02
+#define MODE_NET_BIND   0x04
+#define MODE_CSV        0x08
+#define MODE_QUICK      0x10
 
 
 // MODE CALCULATION
