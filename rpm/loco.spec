@@ -3,11 +3,11 @@
 #
 Summary: An end-to-end bandwidth estimation tool.
 Name: loco
-Version: 0.2
+Version: 0.3
 Release: 1
 License: GPL
-Source0: https://github.com/downloads/firnsy/loco/loco-0.2.tar.gz
-Source1: loco-0.2.tar.gz
+Source0: https://github.com/downloads/firnsy/loco/loco-0.3.tar.gz
+Source1: loco-0.3.tar.gz
 URL: http://www.github.com/firnsy/loco.git
 Packager: Ian Firns <firnsy@securixlive.com>
 
