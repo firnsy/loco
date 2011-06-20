@@ -5,7 +5,7 @@
 #include <sys/time.h>
 
 #define VER_MAJOR "0"
-#define VER_MINOR "2"
+#define VER_MINOR "3"
 #define VER_REV   "0"
 
 #define BUFSIZE 1024

@@ -3,7 +3,7 @@
 0. SUMMARY
 ------------------------------------------------------------------------------
 
-loco - version 0.2
+loco - version 0.3
 
 loco measures the end to end capacity of a network path from host S (server)
 to client (C). The capacity of a path (aka bottleneck bandwidth), is the
