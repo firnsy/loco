@@ -400,6 +400,7 @@ void usage(const char *program_name)
   fprintf(stdout, "  %%ul           UDP kernel/user latency [us]\n");
   fprintf(stdout, "  %%pm           Preliminary assessed bandwidth average [Mbps]\n");
   fprintf(stdout, "  %%ps           Preliminary assessed standard deviation [Mbps]\n");
+  fprintf(stdout, "  %%lt           Round trip / latency time of the communication channel (TCP) [us]\n");
   fprintf(stdout, "\n");
 }
 
@@ -1349,6 +1350,7 @@ void result_format_validate(const char *format)
   // ul - UDP kernel/user latency [us]
   // pm - preliminary assessed average
   // ps - preliminary assessed standard deviation
+  // lt - round trip / latency time of the communication channel (TCP) [us]
 
   const char *fp = format;
 
@@ -1366,6 +1368,7 @@ void result_format_validate(const char *format)
     else if ( strncmp(fp, "%ul", 3) == 0 ) {}
     else if ( strncmp(fp, "%pm", 3) == 0 ) {}
     else if ( strncmp(fp, "%ps", 3) == 0 ) {}
+    else if ( strncmp(fp, "%lt", 3) == 0 ) {}
     else
     {
       fprintf(stderr, "FATAL: Undefined format \"%s\" specified!\n", fp);
@@ -1388,6 +1391,7 @@ void result_format_write(FILE *fd, const char *format)
   // ul - UDP kernel/user latency [us]
   // pm - preliminary assessed average
   // ps - preliminary assessed standard deviation
+  // lt - round trip / latency time of the communication channel (TCP) [us]
 
   const char *fp = format;
   int format_length = strlen(format);
@@ -1417,6 +1421,8 @@ void result_format_write(FILE *fd, const char *format)
       fprintf(fd, "%.4f", conf.prelim_bw_mean);
     else if ( strncmp(fp, "%ps", 3) == 0 )
       fprintf(fd, "%.4f", conf.prelim_bw_std);
+    else if ( strncmp(fp, "%lt", 3) == 0 )
+      fprintf(fd, "%.4f", conf.rtt_tcp_socket_average); 
 
     fp+=3;
   }
