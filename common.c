@@ -107,7 +107,7 @@ void array_sort(double array[], double array_ordered[], unsigned int elements)
         array_temp[j+1] = array_ordered[j];
       }
     }
-   
+
   for (i=0; i<elements; i++)
     array_ordered[i] = array_temp[i];
 }
@@ -126,6 +126,33 @@ void array_print(double array[], unsigned int elements)
 //
 // ARRAY STATISTICS
 //
+
+double stat_array_interquartile_mean(double array[], unsigned int elements)
+{
+  int i;
+  double array_sorted[elements];
+  double array_total = 0.0;
+
+  array_sort(array, array_sorted, elements);
+
+  double quartile_observations = elements / 4;
+  double quartile_range = elements / 2;
+  int quartile_observations_truncated = (int)floor(quartile_observations);
+  int quartile_observations_whole = quartile_observations_truncated + 1;
+
+  // we want at least one whole observation
+  if ( quartile_observations_whole < 1 )
+    return -1;
+
+  // add whole observations
+  for ( i = quartile_observations_whole; i < elements - quartile_observations_whole; i++)
+    array_total += array[i];
+
+  // add truncated observations with weighting
+  array_total += (array[quartile_observations_truncated] + array[elements - quartile_observations_truncated]) * ((double)quartile_observations_whole - quartile_observations);
+
+  return array_total / quartile_range;
+}
 
 double stat_array_mean(double array[], unsigned int elements)
 {
@@ -187,7 +214,7 @@ double stat_array_kurtosis(double array[], unsigned int elements)
 
   for (i=0; i<elements; i++)
     array_total += pow(array[i] - array_mean, 2);
-  
+
   array_variance = array_total / elements;
 
   if ( array_variance == 0 )
@@ -196,7 +223,7 @@ double stat_array_kurtosis(double array[], unsigned int elements)
   array_total = 0.0;
   for (i=0; i<elements; i++)
     array_total += pow(array[i] - array_mean, 4);
-  
+
   return array_total / pow(array_variance, 2);
 }
 

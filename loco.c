@@ -939,7 +939,7 @@ int session_prelim()
     send_control_message(conf.tcp_socket, MSG_TRAIN_LENGTH_SET, conf.train_length);
   }
 
-  conf.prelim_bw_mean = stat_array_mean(conf.p1_trains_bw, conf.p1_trains_count);
+  conf.prelim_bw_mean = stat_array_interquartile_mean(conf.p1_trains_bw, conf.p1_trains_count);
   conf.prelim_bw_std = stat_array_std(conf.p1_trains_bw, conf.p1_trains_count);
 
   ulog(LOG_INFO, "Preliminary bandwidth measurements:\n"
@@ -987,7 +987,7 @@ int session_p1()
       return 1;
 
     // TODO: remove when saved to file
-    conf.prelim_bw_mean = stat_array_mean(conf.p1_trains_bw, conf.p1_trains_count);
+    conf.prelim_bw_mean = stat_array_interquartile_mean(conf.p1_trains_bw, conf.p1_trains_count);
 
     fsm_state_set(FSM_P1_CALC);
 
@@ -1244,7 +1244,7 @@ void session_calculate()
 
   //
   // calculate the average dispersion rate (ADR) from phase 2
-  double adr = stat_array_mean(conf.p2_trains_bw, conf.p2_trains_count);
+  double adr = stat_array_interquartile_mean(conf.p2_trains_bw, conf.p2_trains_count);
   double adr_std = stat_array_std(conf.p2_trains_bw, conf.p2_trains_count);
 
   ulog(LOG_INFO, "Final bandwidth measurements:\n"
@@ -1550,20 +1550,26 @@ int session_csv_read(const char *filepath)
 
   n = fscanf(fp, "%d", &conf.p1_trains_count);
 
-  ulog(LOG_DEBUG, "Reading %d values ...\n", conf.p1_trains_count);
+  if (n > 0)
+  {
+    ulog(LOG_DEBUG, "Reading %d values ...\n", conf.p1_trains_count);
 
-  for (i=0; i<conf.p1_trains_count; i++)
-    n = fscanf(fp, "%lf,%lf", &conf.p1_trains_bw[i], &conf.p1_trains_delta[i]);
+    for (i=0; i<conf.p1_trains_count; i++)
+      n = fscanf(fp, "%lf,%lf", &conf.p1_trains_bw[i], &conf.p1_trains_delta[i]);
+  }
 
   //
   // read phase 2 results
 
   n = fscanf(fp, "%d", &conf.p2_trains_count);
 
-  ulog(LOG_DEBUG, "Reading %d values ...\n", conf.p2_trains_count);
+  if (n > 0)
+  {
+    ulog(LOG_DEBUG, "Reading %d values ...\n", conf.p2_trains_count);
 
-  for (i=0; i<conf.p2_trains_count; i++)
-    n = fscanf(fp, "%lf,%lf", &conf.p2_trains_bw[i], &conf.p2_trains_delta[i]);
+    for (i=0; i<conf.p2_trains_count; i++)
+      n = fscanf(fp, "%lf,%lf", &conf.p2_trains_bw[i], &conf.p2_trains_delta[i]);
+  }
 
   fclose(fp);
 

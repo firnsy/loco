@@ -5,7 +5,7 @@
 #include <sys/time.h>
 
 #define VER_MAJOR "0"
-#define VER_MINOR "3"
+#define VER_MINOR "4"
 #define VER_REV   "0"
 
 #define BUFSIZE 1024
@@ -100,6 +100,7 @@ double time_delta_us(struct timeval t1, struct timeval t2);
 void array_sort(double array[], double array_ordered[], unsigned int elements);
 void array_print(double array[], unsigned int elements); 
 
+double stat_array_interquartile_mean(double array[], unsigned int elements);
 double stat_array_mean(double array[], unsigned int elements);
 double stat_array_median(double array[], unsigned int elements);
 double stat_array_std(double array[], unsigned int elements);
