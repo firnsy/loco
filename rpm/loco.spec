@@ -1,18 +1,15 @@
-#
-# Example spec file for cdplayer app...
-#
 Summary: An end-to-end bandwidth estimation tool.
 Name: loco
-Version: 0.3
+Version: 0.4
 Release: 1
 License: GPL
-Source0: https://github.com/downloads/firnsy/loco/loco-0.3.tar.gz
-Source1: loco-0.3.tar.gz
+Source0: https://github.com/downloads/firnsy/loco/loco-0.4.tar.gz
+Source1: loco-0.4.tar.gz
 URL: http://www.github.com/firnsy/loco.git
 Packager: Ian Firns <firnsy@securixlive.com>
 
 %description
-The summary says it all.
+An end-to-end bandwidth estimation tool.
 
 %prep
 %setup -q -a 0
